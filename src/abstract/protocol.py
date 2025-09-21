@@ -1,0 +1,23 @@
+from abc import ABC, abstractmethod
+
+class AbstractProtocol(ABC):
+    """Fake tls protocol. Apparently it should be included in TLSConnection as a choice near real socket()"""
+
+    @abstractmethod
+    def handshake(self): ...
+    @abstractmethod
+    def send(self, msg: str) -> bytes: ...
+    @abstractmethod
+    def recv(self, msg: bytes) -> str: ...
+
+    @abstractmethod
+    def generate_hello(self): ...
+
+    @abstractmethod
+    def process_hello(self): ...
+
+    @abstractmethod
+    def send_finished(self): ...
+
+    @abstractmethod
+    def receive_finished(self): ...
