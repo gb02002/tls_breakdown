@@ -6,19 +6,32 @@ from random import randbytes
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, ECDH
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    EllipticCurvePublicKey,
+    SECP256R1,
+    ECDH,
+)
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
 import src.crypto_utils.connection as connection_utils
-from src.crypto_utils.keys import generate_key_pair, calculate_transcript_hash, encode_finished, AEAD_encrypt, HMAC, AEAD_decrypt, parse_finished
+from src.crypto_utils.keys import (
+    generate_key_pair,
+    calculate_transcript_hash,
+    encode_finished,
+    AEAD_encrypt,
+    HMAC,
+    AEAD_decrypt,
+    parse_finished,
+)
 from src.crypto_utils.logging_module import instantiate_logger
 from src.crypto_utils.messaging import hkdf_extract, hkdf_expand
 
 logger = instantiate_logger("client")
 
+
 def ClientHello():
     random = randbytes(32)
-    payload: dict[str: Any] = {
+    payload: dict[str, Any] = {
         "version": "1.3",
         "supported_groups": ["secp256r1", "X25519"],
         "key_share": [],
@@ -29,8 +42,12 @@ def ClientHello():
     for group in payload["supported_groups"]:
         priv, pub = generate_key_pair(group)
         pub_bytes = pub.public_bytes(
-            encoding=serialization.Encoding.X962 if group == "secp256r1" else serialization.Encoding.Raw,
-            format=serialization.PublicFormat.UncompressedPoint if group == "secp256r1" else serialization.PublicFormat.Raw
+            encoding=serialization.Encoding.X962
+            if group == "secp256r1"
+            else serialization.Encoding.Raw,
+            format=serialization.PublicFormat.UncompressedPoint
+            if group == "secp256r1"
+            else serialization.PublicFormat.Raw,
         )
         payload["key_share"].append((group, b64encode(pub_bytes).decode()))
         privates[group] = priv
@@ -44,11 +61,7 @@ def process_ServerHello(private_key: dict, request: dict, client_random: bytes):
     server_random_str = request["random"]
     signature = b64decode(request["signature"])
 
-    message = (
-        b64decode(server_key_b64) +
-        client_random +
-        b64decode(server_random_str)
-    )
+    message = b64decode(server_key_b64) + client_random + b64decode(server_random_str)
 
     try:
         connection_utils.SERVER_SIGNING_PUBKEY.verify(signature, message)
@@ -65,7 +78,9 @@ def process_ServerHello(private_key: dict, request: dict, client_random: bytes):
         shared_secret = private_key["X25519"].exchange(server_pub_key)
 
     elif chosen_group == "secp256r1":
-        server_pub_key = EllipticCurvePublicKey.from_encoded_point(SECP256R1(), server_pub_bytes)
+        server_pub_key = EllipticCurvePublicKey.from_encoded_point(
+            SECP256R1(), server_pub_bytes
+        )
         shared_secret = private_key["secp256r1"].exchange(ECDH(), server_pub_key)
 
     else:
@@ -109,34 +124,48 @@ def client_main():
     server_finished_enc = client.recv(4096)
 
     server_hello = json.loads(response_str)
-    our_shared_secret, server_random = process_ServerHello(client_keys, server_hello, client_random)
+    our_shared_secret, server_random = process_ServerHello(
+        client_keys, server_hello, client_random
+    )
     logger.inside("shared: %s, server_random: %s", our_shared_secret, server_random)
 
     # --- (1) Early Secret ---
-    salt_zero = b'\x00' * 32
+    salt_zero = b"\x00" * 32
     early_secret = hkdf_extract(salt_zero, b"")  # <- no PSK
 
     # --- (2) Handshake Secret ---
     handshake_secret = hkdf_extract(early_secret, our_shared_secret)
 
     # --- (3) Transcript Hash на данный момент (ClientHello + ServerHello) ---
-    transcript_hash = calculate_transcript_hash(client_hello_to_send, server_hello_bytes)
+    transcript_hash = calculate_transcript_hash(
+        client_hello_to_send, server_hello_bytes
+    )
 
     # --- (4) Handshake traffic secrets ---
-    client_hs_traffic_secret = hkdf_expand(handshake_secret, b"c hs traffic" + transcript_hash)
-    server_hs_traffic_secret = hkdf_expand(handshake_secret, b"s hs traffic" + transcript_hash)
+    client_hs_traffic_secret = hkdf_expand(
+        handshake_secret, b"c hs traffic" + transcript_hash
+    )
+    server_hs_traffic_secret = hkdf_expand(
+        handshake_secret, b"s hs traffic" + transcript_hash
+    )
 
     # --- (5) Traffic keys для расшифровки Finished от сервера ---
     server_write_key = hkdf_expand(server_hs_traffic_secret, b"key", 16)
     server_write_iv = hkdf_expand(server_hs_traffic_secret, b"iv", 12)
 
     # --- (6) Ждём Server Finished ---
-    server_finished_plain = AEAD_decrypt(server_write_key, server_write_iv, server_finished_enc)
+    server_finished_plain = AEAD_decrypt(
+        server_write_key, server_write_iv, server_finished_enc
+    )
 
     # Проверка Server Finished
     expected_verify_data = HMAC(server_hs_traffic_secret, transcript_hash)
-    assert parse_finished(server_finished_plain) == expected_verify_data, "Server Finished verification failed"
-    logger.inside("FINISHED from server completed successfully [+]: %s", expected_verify_data)
+    assert parse_finished(server_finished_plain) == expected_verify_data, (
+        "Server Finished verification failed"
+    )
+    logger.inside(
+        "FINISHED from server completed successfully [+]: %s", expected_verify_data
+    )
 
     # --- (7) Traffic keys для отправки Client Finished ---
     client_write_key = hkdf_expand(client_hs_traffic_secret, b"key", 16)
@@ -178,7 +207,6 @@ def client_main():
     response = client.recv(4096)
     plaintext = AEAD_decrypt(key=server_app_key, iv=server_app_iv, ciphertext=response)
     logger.inside("Server_reply: %s", plaintext.decode())
-
 
 
 if __name__ == "__main__":
